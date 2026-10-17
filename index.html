@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SIGReg Visualizer — text to vector on the left, SIGReg on the right</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js",
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header>
+    <div class="title-row">
+      <h1>SIGReg <span class="accent">Visualizer</span></h1>
+      <a class="gh-link" href="https://github.com/kreasof-ai/sigreg" target="_blank" rel="noopener">kreasof-ai/sigreg</a>
+    </div>
+    <p class="tagline">
+      Embed text with a transformer, then watch <strong>SIGReg</strong>
+      (Sketched Isotropic Gaussian Regularization) push the embedding cloud
+      toward an isotropic Gaussian. Left: raw embeddings. Right: after SIGReg.
+    </p>
+  </header>
+
+  <section class="controls">
+    <div class="row">
+      <label for="model">Embedding model</label>
+      <select id="model">
+        <option value="Xenova/all-MiniLM-L6-v2" selected>MiniLM-L6 (text, 384d, fast)</option>
+        <option value="Xenova/all-mpnet-base-v2">MPNet base (text, 768d, accurate)</option>
+        <option value="Xenova/bge-small-en-v1.5">BGE small (text, 384d)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="maxlen">Context</label>
+      <select id="maxlen" title="Cap on tokens per item — shorter = faster.">
+        <option value="auto" selected>Auto</option>
+        <option value="3">Shortest (≤ 3)</option>
+        <option value="8">Medium (≤ 8)</option>
+        <option value="32">Long (≤ 32)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="mode">Mode</label>
+      <div class="seg" role="tablist" id="mode-seg">
+        <button class="seg-btn active" data-mode="weak" type="button" title="Weak SIGReg — closed-form, exact isotropy">Weak</button>
+        <button class="seg-btn" data-mode="strong" type="button" title="Strong SIGReg — gradient descent on the empirical CF">Strong</button>
+        <button class="seg-btn" data-mode="off" type="button" title="No transformation — just for comparison">Off</button>
+      </div>
+    </div>
+    <div class="row">
+      <label for="sketch">Sketch dim</label>
+      <input id="sketch" type="number" min="4" max="256" step="4" value="32" />
+    </div>
+    <div class="row">
+      <label for="iters">Iters</label>
+      <input id="iters" type="number" min="1" max="200" step="1" value="40" />
+    </div>
+    <div class="row">
+      <label for="dim">Dim</label>
+      <div class="seg" role="tablist" id="dim-seg">
+        <button class="seg-btn active" data-dim="2" type="button">2D</button>
+        <button class="seg-btn" data-dim="3" type="button">3D</button>
+      </div>
+    </div>
+    <div class="row">
+      <label for="show-labels">Labels</label>
+      <div class="seg" role="tablist" id="labels-seg">
+        <button class="seg-btn active" data-show="false" type="button">Off</button>
+        <button class="seg-btn" data-show="true" type="button">On</button>
+      </div>
+    </div>
+    <div class="row">
+      <button id="play-anim" class="primary" type="button">Play animation</button>
+    </div>
+    <div id="status" class="status">Ready. Add data or click "Try example".</div>
+  </section>
+
+  <section class="io">
+    <div class="panel">
+      <h2>1. Your dataset</h2>
+      <p class="hint">One item per line. These become blue points on the left, then transformed points on the right.</p>
+      <div class="input-row">
+        <textarea id="batch-text" placeholder="A photo of a red rose&#10;A bowl of fresh pasta&#10;A thunderstorm in the mountains"></textarea>
+        <div class="actions">
+          <button id="add-batch" class="primary">Add to dataset</button>
+          <button id="clear-dataset">Clear</button>
+          <button id="load-example" class="ghost">Try example</button>
+          <label class="file-btn">
+            <input id="file-input" type="file" multiple accept=".txt,.csv,text/*" />
+            <span>Load file(s)</span>
+          </label>
+        </div>
+      </div>
+      <div id="dataset-summary" class="muted">0 items</div>
+    </div>
+
+    <div class="panel">
+      <h2>2. New point</h2>
+      <p class="hint">Adds one pink point to both views so you can track exactly where it lands before and after SIGReg.</p>
+      <div class="input-row">
+        <textarea id="new-text" placeholder="A short description, sentence, or question."></textarea>
+        <div class="actions">
+          <button id="add-new" class="primary">Add new point</button>
+        </div>
+      </div>
+      <div id="new-list" class="chips"></div>
+    </div>
+  </section>
+
+  <section class="dual">
+    <div class="viz-card" id="card-left">
+      <div class="viz-header">
+        <h2><span class="dot blue"></span> Original embeddings</h2>
+        <div class="viz-meta" id="left-meta">—</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart-left" width="900" height="560" aria-label="2D scatter of original embeddings"></canvas>
+        <div id="three-left" class="three-container" hidden></div>
+        <div id="tooltip-left" class="tooltip" hidden></div>
+      </div>
+    </div>
+
+    <div class="arrow" aria-hidden="true">
+      <div class="arrow-body">
+        <div class="arrow-label" id="mode-badge">Weak SIGReg</div>
+        <svg viewBox="0 0 80 30" width="80" height="30">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#7aa2ff" />
+            </marker>
+          </defs>
+          <line x1="2" y1="15" x2="74" y2="15" stroke="#7aa2ff" stroke-width="2" marker-end="url(#arr)" />
+        </svg>
+        <div class="arrow-foot" id="loss-badge">—</div>
+      </div>
+    </div>
+
+    <div class="viz-card" id="card-right">
+      <div class="viz-header">
+        <h2><span class="dot orange"></span> After SIGReg</h2>
+        <div class="viz-meta" id="right-meta">—</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart-right" width="900" height="560" aria-label="2D scatter of SIGReg-transformed embeddings"></canvas>
+        <div id="three-right" class="three-container" hidden></div>
+        <div id="tooltip-right" class="tooltip" hidden></div>
+        <div class="legend-overlay">
+          <div class="legend-row"><span class="sw faded-blue"></span>start (before)</div>
+          <div class="legend-row"><span class="sw orange"></span>end (after)</div>
+          <div class="legend-row"><span class="sw arrow"></span>displacement</div>
+          <div class="magnitude-bar"><span class="bar"></span><span class="mag-label">small</span><span class="mag-label right">large</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat-card">
+      <div class="stat-title">Strong-SIGReg loss</div>
+      <div class="stat-value" id="stat-strong">—</div>
+      <div class="stat-foot" id="stat-strong-foot">lower is closer to Gaussian</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Weak-SIGReg loss (‖cov−I‖<sub>F</sub>)</div>
+      <div class="stat-value" id="stat-weak">—</div>
+      <div class="stat-foot" id="stat-weak-foot">0 = perfect isotropy</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Isotropy ratio (λ<sub>min</sub>/λ<sub>max</sub>)</div>
+      <div class="stat-value" id="stat-iso">—</div>
+      <div class="stat-foot">1.0 = spherical cloud</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Off-diagonal energy</div>
+      <div class="stat-value" id="stat-off">—</div>
+      <div class="stat-foot">fraction of cov mass in off-diagonals</div>
+    </div>
+    <div class="stat-card wide">
+      <div class="stat-title">Top-8 covariance eigenvalues <span class="muted small">(right side)</span></div>
+      <div class="eig-bars" id="eig-bars"></div>
+    </div>
+  </section>
+
+  <section class="loss-trail">
+    <h2>Strong-SIGReg loss across iterations</h2>
+    <div class="chart-wrap small">
+      <canvas id="loss-chart" width="900" height="160" aria-label="Strong SIGReg loss vs iteration"></canvas>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      All computation runs locally in your browser. The transformer model is
+      fetched from the <code>Xenova</code> mirror on first use, then cached.
+      SIGReg implementations live in <code>sigreg.js</code>.
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

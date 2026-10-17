@@ -1,0 +1,14 @@
+{
+  "name": "vis-sigreg",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Side-by-side visualizer for SIGReg (Sketched Isotropic Gaussian Regularization): text-to-vector on the left, SIGReg-transformed vectors on the right.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "three": "^0.160.0"
+  }
+}
